@@ -1,0 +1,209 @@
+# Code created by Aidan Simons for PHYS3900
+# School of Mathematics and Physics, The University of Queensland, QLD 4072, Australia
+# e-mail address: a.simons @uq.edu.au
+
+# This code requires linux as well as having the Bilby and lalsuite packages installed. See the Bilby documentation for how to set this up.
+# Ashton, G. et al, 2019. Bilby: A User-friendly Bayesian Inference Library for Gravitational-wave Astronomy. The Astrophysical Journal Supplement Series, 241(2), p.27.
+
+import bilby
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+
+from bilby.core.utils import (infft, logger, safe_save_figure)
+from bilby.gw.utils import asd_from_freq_series
+from bilby.gw.detector import Interferometer
+
+time_duration = 4.                     # time duration (seconds)
+sampling_frequency = 2048.             # sampling frequency (Hz)
+outdir = 'visualising_the_results'     # directory in which to store output
+label = 'example'                      # identifier to apply to output files
+
+i=0
+np.random.seed(12987770)		# setting a seed so that we speed up any recalculation process  (123221/12243 for mass, 12954 and for lumin. dist., 1298776 for spin mag, 12987762 for tilt angles, 12987763 for azimuthal angles, 12987763 for inclination angle,
+waveform_list=[]			# list of stored waveforms, needed when we are plotting at the end of the code
+IFOs=[]				# list of stored interferometers, again this is used when we are plotting at the end of the code
+min_freq=np.inf			# setting the min frequency to be +infinity, this is used when updating the axis at the end of the for loop
+max_freq=-np.inf			# setting the max frequency to be -infinity, this is used when updating the axis at the end of the for loop
+fig, axs = plt.subplots(2, 1,gridspec_kw=dict(height_ratios=[1.5, 1]),figsize=(16, 12.5))		# creating the figure before the for loop for easier code implementation
+colour_list=['r','b']			# the colour list for the different waveforms. This needs to be updated if we change the number of waveforms
+
+# Creating interferometer waveforms with random masses. This generates 3 waveforms, so changing the range will then change the number of waveforms calculated/plotted.
+for i in range(2):
+
+	# randomising some parameters. This is easy to change/tweak as you can simply update the injection parameter and numbers
+	# for example, mass_1=round(np.random.uniform(12, 50), 2) and mass_2=round(np.random.uniform(12, 50), 2) will randomise the masses to
+	# 2 decimal places and range from 12 solar masses to 50 solar masses
+	'mass_1=round(np.random.uniform(12, 80), 2)'
+	'mass_2=round(np.random.uniform(12, 80), 2)'
+	mass_1=29.8
+	mass_2=36.8
+	
+	a_1=round(np.random.uniform(0, 1), 2)
+	a_2=round(np.random.uniform(0, 1), 2)
+	
+	# for luminosity distance, we can use
+	'luminosity_distance=round(np.random.uniform(100, 1000), 2)'		# then set luminosity_distance=luminosity_distance below
+	
+	# specify injection parameters
+	injection_parameters = dict(
+		mass_1=mass_1,                       # detector frame (redshifted) primary mass (solar masses)
+		mass_2=mass_2,                       # detector frame (redshifted) secondary mass (solar masses)
+		a_1=a_1,                             # primary dimensionless spin magnitude, from zero to one
+		a_2=a_2,                             # secondary dimensionless spin magnitude, from zero to one
+		tilt_1=0.5,                          # polar angle between primary spin and the orbital angular momentum (radians)
+		tilt_2=1.0,                          # polar angle between secondary spin and the orbital angular momentum 
+		phi_12=1.7,                          # azimuthal angle between primary and secondary spin (radians)
+		phi_jl=0.3,                          # azimuthal angle between total angular momentum and orbital angular momentum (radians)
+		luminosity_distance=200,             # luminosity distance to source (Mpc) (default is 200)
+		theta_jn=0.4,                        # inclination angle between line of sight and orbital angular momentum (radians)
+		phase=1.3,                           # phase (radians)
+		ra=1.375,                            # source right ascension (radians)
+		dec=-1.2108,                         # source declination (radians)
+		geocent_time=1126259642.413,         # reference time at geocentre (time of coalescence or peak amplitude) (GPS seconds)
+		psi=2.659                            # gravitational wave polarisation angle
+		)
+
+	# specify waveform arguments
+	waveform_arguments = dict(waveform_approximant='IMRPhenomPv2', # waveform approximant name
+		reference_frequency=50.,)             			# gravitational waveform reference frequency (Hz)
+	
+	# adding a waveform to a list by using the waveform generator function. Here, we can change the model of the GW, this is where
+	# we could replace lal_binary_black_hole with another model...
+	waveform_list.append(bilby.gw.waveform_generator.WaveformGenerator(
+		    sampling_frequency=sampling_frequency, duration=time_duration,
+		        frequency_domain_source_model=bilby.gw.source.lal_binary_black_hole,
+		            parameters=injection_parameters, waveform_arguments=waveform_arguments))
+		            
+		            
+	# create the frequency domain signal
+	hf_signal = waveform_list[i].frequency_domain_strain()
+
+	# initialise an interferometer based on LIGO Hanford, complete with simulated noise and injected signal
+	IFOs.append(bilby.gw.detector.get_interferometer_with_fake_noise_and_injection(
+	          	      'H1', injection_polarizations=hf_signal, injection_parameters=injection_parameters,duration=time_duration,
+	            	        sampling_frequency=sampling_frequency, outdir=outdir))
+		                    
+
+
+
+	# first, set up all priors to be equal to a delta function at their designated value
+	priors = bilby.gw.prior.BBHPriorDict(injection_parameters.copy())
+
+
+	# then, reset the priors on the masses and luminosity distance to conduct a search over these parameters
+	priors['mass_1'] = bilby.core.prior.Uniform(mass_1-10, mass_1+10, 'mass_1')
+	priors['mass_2'] = bilby.core.prior.Uniform(mass_2-10, mass_2+10, 'mass_2')
+	priors['luminosity_distance'] = bilby.core.prior.Uniform(150, 250, 'luminosity_distance')
+
+
+	# compute the likelihoods
+	likelihood = bilby.gw.likelihood.GravitationalWaveTransient(interferometers=[IFOs[i]], waveform_generator=waveform_list[i])
+
+	# label setup for result (below)
+	label_i=label+str('%4.2lf_%4.2lf' % (mass_1,mass_2))
+	
+	# calculations for each parameter result given the specified parameters
+	result = bilby.core.sampler.run_sampler(likelihood=likelihood, priors=priors, sampler='dynesty', npoints=100,
+		                                   injection_parameters=injection_parameters, outdir=outdir, label=label_i, walks=5)
+
+	# Setting up parameters for calculations below
+	samples = result.posterior
+	start_time = np.mean(samples.geocent_time) - 0.4
+	end_time = np.mean(samples.geocent_time) + 0.2
+	time_idxs = ((IFOs[i].time_array >= start_time) & (IFOs[i].time_array <= end_time))
+	frequency_idxs = np.where(IFOs[i].frequency_mask)[0]
+	frequency_idxs = frequency_idxs[::max(1, len(frequency_idxs) // 4000)]
+	fd_waveforms = list()
+	td_waveforms = list()
+	
+	# Calculating the waveform mean
+	for _, params in samples.iterrows():
+		params = dict(params)
+		wf_pols = waveform_list[i].frequency_domain_strain(params)
+		fd_waveform = IFOs[i].get_detector_response(wf_pols, params)
+		fd_waveforms.append(fd_waveform[frequency_idxs])
+		td_waveform = infft(fd_waveform * np.sqrt(2. / IFOs[i].sampling_frequency) / IFOs[i].amplitude_spectral_density_array,
+		        sampling_frequency)[time_idxs]
+		td_waveforms.append(td_waveform)
+		
+	fd_waveforms = asd_from_freq_series(
+		fd_waveforms, 1 / IFOs[i].strain_data.duration)
+	td_waveforms = np.array(td_waveforms)
+	
+	# Calculating the injected waveform
+	hf_inj = waveform_list[i].frequency_domain_strain(injection_parameters)
+	hf_inj_det = IFOs[i].get_detector_response(hf_inj, injection_parameters)
+	ht_inj_det = infft(hf_inj_det * np.sqrt(2. / IFOs[i].sampling_frequency) /
+		IFOs[i].amplitude_spectral_density_array,sampling_frequency)[time_idxs]
+
+	# Confidence interval for plots/mean
+	level = 0.9			# This is at a 90% confidence interval, so we can change this if required
+	delta = (1 + level) / 2
+	upper_percentile = delta * 100
+	lower_percentile = (1 - delta) * 100
+	logger.debug('Plotting posterior between the {} and {} percentiles'.format(
+			lower_percentile, upper_percentile))
+
+	# Gathering parameters to be plotted
+	plot_times = IFOs[i].time_array[time_idxs]
+	plot_times -= IFOs[i].strain_data.start_time
+	start_time -= IFOs[i].strain_data.start_time
+	end_time -= IFOs[i].strain_data.start_time
+	plot_frequencies = IFOs[i].frequency_array[frequency_idxs]
+	lower_limit = np.mean(fd_waveforms, axis=0)[0] / 1e3
+	
+	# Plotting the waveform mean, a legend is also created with the plotted waveform
+	# for luminosity distance, change label='Mean reconstructed for ' + str('%6.2lfMpc' % (luminosity_distance))
+	# for mass, '%4.2lf$M_{\odot}$ and %4.2lf$M_{\odot}$' % (mass_1,mass_2)
+	axs[0].loglog(plot_frequencies, np.mean(fd_waveforms, axis=0), 
+		color=colour_list[i], label='Mean reconstructed for dimensionless spin magnitudes ' + str('%4.2lf and %4.2lf' % (a_1,a_2)))
+	axs[0].fill_between(plot_frequencies, np.percentile(fd_waveforms, lower_percentile, axis=0),
+		np.percentile(fd_waveforms, upper_percentile, axis=0), color=colour_list[i],
+		label='{}\% credible interval for dimensionless spin magnitudes '.format(int(upper_percentile - lower_percentile)) + 
+		str('%4.2lf and %4.2lf' % (a_1,a_2)), alpha=0.3)
+	axs[1].plot(plot_times, np.mean(td_waveforms, axis=0),color=colour_list[i])
+	axs[1].fill_between(plot_times, np.percentile(td_waveforms, lower_percentile, axis=0),
+		np.percentile(td_waveforms, upper_percentile, axis=0),color=colour_list[i],alpha=0.3)
+		
+		
+	# Plotting injected waveform, again a legend is also created with the plotted waveform
+	axs[0].loglog(plot_frequencies,asd_from_freq_series(hf_inj_det[frequency_idxs],
+		1 / IFOs[i].strain_data.duration),color=colour_list[i], label='Injection for dimensionless spin magnitudes ' + 
+		str('%4.2lf and %4.2lf' % (a_1,a_2)),linestyle=':')
+	axs[1].plot(plot_times, ht_inj_det,color=colour_list[i], linestyle=':')
+	logger.debug('Plotted injection.')
+	
+	# Here we are checking if the new parameters are large enough to update the figures axis
+	if IFOs[i].minimum_frequency < min_freq:
+		min_freq=IFOs[i].minimum_frequency
+	if IFOs[i].maximum_frequency > max_freq:
+		max_freq=IFOs[i].maximum_frequency
+	
+	"""
+	if mass_1 < mass_2:
+		mass_ratio = 
+	higher_mass
+	plt.text(0, 0, 'Mass ratio = ' + str())
+	"""
+
+# Setting axis labels/limits	
+f_domain_x_label = "$f [\\mathrm{Hz}]$"
+f_domain_y_label = "$\\mathrm{ASD} \\left[\\mathrm{Hz}^{-1/2}\\right]$"
+t_domain_x_label = "$t - start time [s]$"
+t_domain_y_label = "Whitened Strain"
+axs[0].set_xlim(min_freq,max_freq)
+axs[1].set_xlim(start_time, end_time)
+axs[0].set_ylim(lower_limit)
+axs[0].set_xlabel(f_domain_x_label)
+axs[0].set_ylabel(f_domain_y_label)
+axs[1].set_xlabel(t_domain_x_label)
+axs[1].set_ylabel(t_domain_y_label)
+axs[0].legend(loc='lower left', ncol=2)
+
+# Saving the figure
+filename = os.path.join('./Test' + '_{}_waveform.{}'.format(IFOs[0].name, 'png'))
+plt.tight_layout()
+safe_save_figure(fig=fig, filename=filename,format='png', dpi=600)
+plt.close()
+logger.debug("Waveform figure saved to {}".format(filename))
